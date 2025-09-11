@@ -1,0 +1,5 @@
+- README.md is used main storage for project's state description and planning
+- The idea of project is to use Arducam time of fly camera, in order to capture depth of photo, and default usb camera to have a human-readable represantation at same time. Captured videos should be saved
+- stack that is going to be used is ArducamDepthCamera, opencv-python.
+- https://github.com/ArduCAM/Arducam_tof_camera -- example of arducam tof usage, use only python examples
+- https://docs.arducam.com/Raspberry-Pi-Camera/Tof-camera/Getting-Started/#hardware-connection-on-pi4 -- documentation of the arducam
