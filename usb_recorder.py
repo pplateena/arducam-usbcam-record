@@ -3,6 +3,38 @@ import time
 import os
 from datetime import datetime
 
+def detect_cameras(max_index=10):
+    """Detect available cameras and return working indices"""
+    available_cameras = []
+    
+    print("Detecting available cameras...")
+    for i in range(max_index):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                height, width = frame.shape[:2]
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                print(f"  Camera {i}: WORKING - {width}x{height} @ {fps} FPS")
+                available_cameras.append(i)
+                
+                # Show a preview frame for 1 second
+                cv2.imshow(f"Camera {i} Preview", frame)
+                cv2.waitKey(1000)
+                cv2.destroyAllWindows()
+            else:
+                print(f"  Camera {i}: detected but cannot read frames")
+        else:
+            pass  # Camera not available at this index
+        cap.release()
+    
+    if not available_cameras:
+        print("No working cameras found!")
+    else:
+        print(f"Found {len(available_cameras)} working cameras: {available_cameras}")
+    
+    return available_cameras
+
 class USBRecorder:
     def __init__(self, camera_index=0, resolution=(1280, 720), fps=30):
         self.camera_index = camera_index
@@ -39,9 +71,9 @@ class USBRecorder:
             os.makedirs(output_path)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(output_path, f"usb_camera_{timestamp}.avi")
+        filename = os.path.join(output_path, f"usb_camera_{timestamp}.mp4")
         
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         writer = None
         
         self.is_recording = True
@@ -100,14 +132,70 @@ class USBRecorder:
             self.camera.release()
         cv2.destroyAllWindows()
 
-if __name__ == "__main__":
-    recorder = USBRecorder()
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='USB Camera Recorder')
+    parser.add_argument('--detect', action='store_true', help='Detect available cameras')
+    parser.add_argument('--record', action='store_true', help='Record video')
+    parser.add_argument('--preview', action='store_true', help='Preview camera (default if no other action specified)')
+    parser.add_argument('--camera', type=int, default=0, help='Camera index (default: 0)')
+    parser.add_argument('--duration', type=int, default=10, help='Recording duration in seconds (default: 10)')
+    parser.add_argument('--output', type=str, default='recordings', help='Output directory (default: recordings)')
+    parser.add_argument('--width', type=int, default=1280, help='Camera width (default: 1280)')
+    parser.add_argument('--height', type=int, default=720, help='Camera height (default: 720)')
+    parser.add_argument('--fps', type=int, default=30, help='Camera FPS (default: 30)')
+    
+    args = parser.parse_args()
+    
+    if args.detect:
+        available_cameras = detect_cameras()
+        if available_cameras:
+            print(f"\nRecommended usage:")
+            for cam_id in available_cameras:
+                print(f"  python usb_recorder.py --record --camera {cam_id}")
+        return
+    
+    if not args.record and not args.preview:
+        args.preview = True  # Default to preview mode
+    
+    recorder = USBRecorder(
+        camera_index=args.camera,
+        resolution=(args.width, args.height),
+        fps=args.fps
+    )
     
     try:
+        print(f"Using camera index: {args.camera}")
         recorder.initialize_camera()
-        result = recorder.record_video(10)  # Record for 10 seconds
-        print("Recording result:", result)
+        
+        if args.record:
+            result = recorder.record_video(args.duration, args.output)
+            if result:
+                print("Recording successful!")
+            else:
+                print("Recording failed!")
+        elif args.preview:
+            print("Preview mode - Press 'q' to quit")
+            recorder.camera = cv2.VideoCapture(args.camera)
+            if not recorder.camera.isOpened():
+                print(f"Failed to open camera {args.camera}")
+                return
+            
+            while True:
+                ret, frame = recorder.camera.read()
+                if ret:
+                    cv2.imshow('USB Camera Preview - Press q to quit', frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+                else:
+                    print("Failed to read frame")
+                    break
+            
     except Exception as e:
         print(f"Error: {e}")
     finally:
         recorder.close()
+
+if __name__ == "__main__":
+    main()
