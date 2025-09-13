@@ -14,7 +14,7 @@ def record_video(duration_seconds=10, output_path="recordings"):
         os.makedirs(output_path)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.join(output_path, f"tof_raw_{timestamp}.avi")
+    filename = os.path.join(output_path, f"tof_raw_{timestamp}.mp4")
 
     cam = ac.ArducamCamera()
     cfg_path = None
@@ -34,8 +34,8 @@ def record_video(duration_seconds=10, output_path="recordings"):
         cam.close()
         return None
 
-    # Video writer setup
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    # Video writer setup - try H.264 first, fallback to XVID
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # H.264 codec
     writer = None
     
     start_time = time.time()
