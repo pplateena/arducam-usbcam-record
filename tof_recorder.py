@@ -1,130 +1,199 @@
+#!/usr/bin/env python3
+
+import sys
 import cv2
 import numpy as np
-import time
+import ArducamDepthCamera as ac
 import os
 from datetime import datetime
-try:
-    import ArducamDepthCamera as ac
-except ImportError:
-    print("ArducamDepthCamera not found. Please install the ArducamDepthCamera library.")
-    ac = None
 
-class ToFRecorder:
-    def __init__(self, max_distance=4000):
-        self.max_distance = max_distance
-        self.camera = None
-        self.is_recording = False
-        
-    def initialize_camera(self):
-        if ac is None:
-            raise ImportError("ArducamDepthCamera library not available")
-            
-        self.camera = ac.ArducamCamera()
-        if self.camera.open(ac.TOFConnect.CSI, 0) != 0:
-            if self.camera.open(ac.TOFConnect.USB, 0) != 0:
-                raise RuntimeError("Failed to open Arducam ToF camera (tried both CSI and USB)")
-        
-        ret = self.camera.start(ac.TOFOutput.DEPTH)
-        if ret != 0:
-            raise RuntimeError("Failed to start Arducam ToF camera")
-            
-        return True
-    
-    def record_video(self, duration_seconds, output_path="recordings"):
-        if not self.camera:
-            raise RuntimeError("Camera not initialized. Call initialize_camera() first.")
-        
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        depth_filename = os.path.join(output_path, f"tof_depth_{timestamp}.avi")
-        amplitude_filename = os.path.join(output_path, f"tof_amplitude_{timestamp}.avi")
-        
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        depth_writer = None
-        amplitude_writer = None
-        
-        self.is_recording = True
-        start_time = time.time()
-        frame_count = 0
-        
-        print(f"Recording ToF camera for {duration_seconds} seconds...")
-        
-        try:
-            while self.is_recording and (time.time() - start_time) < duration_seconds:
-                frame = self.camera.requestFrame(200)
-                if frame is not None:
-                    depth_buf = frame.getDepthData()
-                    amplitude_buf = frame.getAmplitudeData()
-                    
-                    depth_data = np.frombuffer(depth_buf, dtype=np.uint16, count=int(len(depth_buf)/2))
-                    amplitude_data = np.frombuffer(amplitude_buf, dtype=np.uint16, count=int(len(amplitude_buf)/2))
-                    
-                    depth_data = depth_data.reshape((180, 240))
-                    amplitude_data = amplitude_data.reshape((180, 240))
-                    
-                    depth_8bit = np.interp(depth_data, (0, self.max_distance), (0, 255)).astype(np.uint8)
-                    amplitude_8bit = np.interp(amplitude_data, (0, 1024), (0, 255)).astype(np.uint8)
-                    
-                    depth_colored = cv2.applyColorMap(depth_8bit, cv2.COLORMAP_JET)
-                    amplitude_colored = cv2.applyColorMap(amplitude_8bit, cv2.COLORMAP_GRAY)
-                    
-                    if depth_writer is None:
-                        height, width = depth_colored.shape[:2]
-                        depth_writer = cv2.VideoWriter(depth_filename, fourcc, 20.0, (width, height))
-                        amplitude_writer = cv2.VideoWriter(amplitude_filename, fourcc, 20.0, (width, height))
-                    
-                    depth_writer.write(depth_colored)
-                    amplitude_writer.write(amplitude_colored)
-                    
-                    frame_count += 1
-                    self.camera.releaseFrame(frame)
-                
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-        
-        finally:
-            self.is_recording = False
-            if depth_writer:
-                depth_writer.release()
-            if amplitude_writer:
-                amplitude_writer.release()
-        
-        elapsed_time = time.time() - start_time
-        fps = frame_count / elapsed_time if elapsed_time > 0 else 0
-        
-        print(f"ToF recording completed:")
-        print(f"  Duration: {elapsed_time:.2f} seconds")
-        print(f"  Frames recorded: {frame_count}")
-        print(f"  Average FPS: {fps:.2f}")
-        print(f"  Depth video: {depth_filename}")
-        print(f"  Amplitude video: {amplitude_filename}")
-        
-        return {
-            "depth_file": depth_filename,
-            "amplitude_file": amplitude_filename,
-            "duration": elapsed_time,
-            "frame_count": frame_count,
-            "fps": fps
-        }
-    
-    def stop_recording(self):
-        self.is_recording = False
-    
-    def close(self):
-        if self.camera:
-            self.camera.stop()
-            self.camera.close()
+
+def save_raw_data(depth_data, confidence_data, amplitude_data, frame_number):
+    """Save raw data to files"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create output directory
+    output_dir = f"tof_raw_data_{timestamp}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Save as numpy arrays
+    np.save(os.path.join(output_dir, f"depth_{frame_number:04d}.npy"), depth_data)
+    np.save(os.path.join(output_dir, f"confidence_{frame_number:04d}.npy"), confidence_data)
+
+    if amplitude_data is not None:
+        np.save(os.path.join(output_dir, f"amplitude_{frame_number:04d}.npy"), amplitude_data)
+
+    # Save as CSV for easy reading
+    np.savetxt(os.path.join(output_dir, f"depth_{frame_number:04d}.csv"),
+               depth_data, delimiter=',', fmt='%.3f')
+
+    print(f"Saved frame {frame_number} to {output_dir}/")
+    return output_dir
+
+
+def capture_single_frame(cam):
+    """Capture a single frame and return data"""
+    frame = cam.requestFrame(1000)  # 1 second timeout
+    if frame is None:
+        return None, None, None
+
+    # Get raw data
+    depth_data = frame.getDepthData()
+    confidence_data = frame.getConfidenceData()
+
+    # Try to get amplitude data (may not be available on all models)
+    try:
+        amplitude_data = frame.getAmplitudeData()
+    except:
+        amplitude_data = None
+
+    # Convert to numpy arrays
+    if depth_data is not None:
+        depth_array = np.array(depth_data, dtype=np.float32).reshape(180, 240)
+    else:
+        depth_array = None
+
+    if confidence_data is not None:
+        confidence_array = np.array(confidence_data, dtype=np.float32).reshape(180, 240)
+    else:
+        confidence_array = None
+
+    if amplitude_data is not None:
+        amplitude_array = np.array(amplitude_data, dtype=np.float32).reshape(180, 240)
+    else:
+        amplitude_array = None
+
+    cam.releaseFrame(frame)
+    return depth_array, confidence_array, amplitude_array
+
+
+def continuous_capture(cam, num_frames=10):
+    """Capture multiple frames continuously"""
+    print(f"Starting continuous capture of {num_frames} frames...")
+
+    output_dir = None
+    for i in range(num_frames):
+        print(f"Capturing frame {i + 1}/{num_frames}...")
+
+        depth_data, confidence_data, amplitude_data = capture_single_frame(cam)
+
+        if depth_data is None:
+            print(f"Failed to capture frame {i + 1}")
+            continue
+
+        # Save the data
+        if output_dir is None:
+            output_dir = save_raw_data(depth_data, confidence_data, amplitude_data, i + 1)
+        else:
+            save_raw_data(depth_data, confidence_data, amplitude_data, i + 1)
+
+        # Show basic stats
+        if depth_data is not None:
+            valid_depths = depth_data[~np.isnan(depth_data)]
+            if len(valid_depths) > 0:
+                print(f"  Depth range: {valid_depths.min():.3f}m - {valid_depths.max():.3f}m")
+                print(f"  Average depth: {valid_depths.mean():.3f}m")
+                print(f"  Valid pixels: {len(valid_depths)}/{depth_data.size}")
+
+    print(f"Capture complete. Data saved to: {output_dir}/")
+
+
+def main():
+    """Main function"""
+    print("ArduCAM ToF Camera - Raw Data Capture")
+    print("====================================")
+
+    # Initialize camera
+    cam = ac.ArducamCamera()
+
+    # Try to connect
+    print("Initializing camera...")
+    try:
+        if cam.init(ac.TOFConnect.CSI, ac.TOFOutput.DEPTH) != 0:
+            print("CSI connection failed, trying USB...")
+            if cam.init(ac.TOFConnect.USB, ac.TOFOutput.DEPTH) != 0:
+                print("ERROR: Failed to initialize camera on both CSI and USB")
+                return -1
+            else:
+                print("✓ Camera initialized via USB")
+        else:
+            print("✓ Camera initialized via CSI")
+    except Exception as e:
+        print(f"ERROR: Exception during initialization: {e}")
+        return -1
+
+    # Start camera
+    if cam.start() != 0:
+        print("ERROR: Failed to start camera")
+        return -1
+
+    print("✓ Camera started")
+
+    try:
+        while True:
+            print("\nOptions:")
+            print("1. Capture single frame")
+            print("2. Capture multiple frames (continuous)")
+            print("3. Test camera connection")
+            print("4. Exit")
+
+            choice = input("Enter choice (1-4): ").strip()
+
+            if choice == '1':
+                print("Capturing single frame...")
+                depth_data, confidence_data, amplitude_data = capture_single_frame(cam)
+
+                if depth_data is not None:
+                    save_raw_data(depth_data, confidence_data, amplitude_data, 1)
+
+                    # Show basic info
+                    valid_depths = depth_data[~np.isnan(depth_data)]
+                    if len(valid_depths) > 0:
+                        print(f"✓ Frame captured successfully")
+                        print(f"  Resolution: {depth_data.shape}")
+                        print(f"  Depth range: {valid_depths.min():.3f}m - {valid_depths.max():.3f}m")
+                        print(f"  Valid pixels: {len(valid_depths)}/{depth_data.size}")
+                else:
+                    print("✗ Failed to capture frame")
+
+            elif choice == '2':
+                try:
+                    num_frames = int(input("Number of frames to capture: "))
+                    if num_frames > 0:
+                        continuous_capture(cam, num_frames)
+                    else:
+                        print("Invalid number of frames")
+                except ValueError:
+                    print("Please enter a valid number")
+
+            elif choice == '3':
+                print("Testing camera connection...")
+                depth_data, confidence_data, amplitude_data = capture_single_frame(cam)
+
+                if depth_data is not None:
+                    print("✓ Camera is working properly")
+                    print(f"  Data shape: {depth_data.shape}")
+                    print(f"  Data type: {depth_data.dtype}")
+                    print(f"  Has confidence data: {confidence_data is not None}")
+                    print(f"  Has amplitude data: {amplitude_data is not None}")
+                else:
+                    print("✗ Camera test failed")
+
+            elif choice == '4':
+                break
+
+            else:
+                print("Invalid choice")
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+    except Exception as e:
+        print(f"ERROR: {e}")
+    finally:
+        print("Stopping camera...")
+        cam.stop()
+        print("Done.")
+
 
 if __name__ == "__main__":
-    recorder = ToFRecorder()
-    
-    try:
-        recorder.initialize_camera()
-        result = recorder.record_video(10)  # Record for 10 seconds
-        print("Recording result:", result)
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        recorder.close()
+    main()
