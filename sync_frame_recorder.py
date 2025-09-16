@@ -90,9 +90,13 @@ class SyncFrameRecorder:
         start_time = time.time()
         frame_count = 0
         sync_failures = 0
+        tof_failures = 0
+        usb_failures = 0
+        both_failures = 0
         
         print(f"Starting synchronized frame recording for {duration_seconds} seconds...")
         print("Recording frames in perfect sync...")
+        print("Debug: Detailed sync failure tracking enabled")
         
         try:
             while self.is_recording and (time.time() - start_time) < duration_seconds:
@@ -106,6 +110,7 @@ class SyncFrameRecorder:
                 usb_success = False
                 
                 # Try to get ToF frame
+                tof_start = time.time()
                 try:
                     ac_frame = self.tof_camera.requestFrame(200)  # Short timeout for sync
                     if ac_frame is not None and isinstance(ac_frame, ac.RawData):
@@ -122,16 +127,27 @@ class SyncFrameRecorder:
                             tof_frame = buf_8bit
                         
                         tof_success = True
+                    else:
+                        print(f"Debug: ToF requestFrame returned None or invalid type")
                 except Exception as e:
-                    print(f"ToF frame capture failed: {e}")
+                    print(f"Debug: ToF frame capture exception: {e}")
+                tof_time = time.time() - tof_start
                 
                 # Try to get USB frame
+                usb_start = time.time()
                 try:
                     ret, usb_frame = self.usb_camera.read()
                     if ret and usb_frame is not None:
                         usb_success = True
+                    else:
+                        print(f"Debug: USB camera read failed - ret: {ret}, frame is None: {usb_frame is None}")
                 except Exception as e:
-                    print(f"USB frame capture failed: {e}")
+                    print(f"Debug: USB frame capture exception: {e}")
+                usb_time = time.time() - usb_start
+                
+                # Debug timing information
+                if frame_count % 100 == 0:  # Print every 100th frame
+                    print(f"Debug: Frame {frame_count} - ToF: {tof_time*1000:.1f}ms, USB: {usb_time*1000:.1f}ms, ToF OK: {tof_success}, USB OK: {usb_success}")
                 
                 # Only save if both frames were captured successfully
                 if tof_success and usb_success:
@@ -156,6 +172,18 @@ class SyncFrameRecorder:
                     frame_count += 1
                 else:
                     sync_failures += 1
+                    
+                    # Track specific failure types
+                    if not tof_success and not usb_success:
+                        both_failures += 1
+                        print(f"Debug: Frame {frame_count + sync_failures} - BOTH cameras failed")
+                    elif not tof_success:
+                        tof_failures += 1
+                        print(f"Debug: Frame {frame_count + sync_failures} - ToF camera failed")
+                    elif not usb_success:
+                        usb_failures += 1
+                        print(f"Debug: Frame {frame_count + sync_failures} - USB camera failed")
+                    
                     # Small delay to prevent overwhelming the system
                     time.sleep(0.001)
                 
@@ -183,6 +211,9 @@ class SyncFrameRecorder:
         print(f"  Duration: {elapsed_time:.2f} seconds")
         print(f"  Synchronized frames: {frame_count}")
         print(f"  Sync failures: {sync_failures}")
+        print(f"    - ToF only failures: {tof_failures}")
+        print(f"    - USB only failures: {usb_failures}")
+        print(f"    - Both failed: {both_failures}")
         print(f"  Sync success rate: {sync_success_rate:.1f}%")
         print(f"  Average FPS: {fps:.2f}")
         print(f"  ToF video: {tof_filename}")
