@@ -112,7 +112,7 @@ class SyncFrameRecorder:
                 # Try to get ToF frame
                 tof_start = time.time()
                 try:
-                    ac_frame = self.tof_camera.requestFrame(200)  # Short timeout for sync
+                    ac_frame = self.tof_camera.requestFrame(2000)  # Short timeout for sync
                     if ac_frame is not None and isinstance(ac_frame, ac.RawData):
                         buf = ac_frame.raw_data
                         self.tof_camera.releaseFrame(ac_frame)
